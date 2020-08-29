@@ -1,8 +1,9 @@
 (ns br.com.souenzzo.ds-http
-  (:require [clojure.core.async :as async]
-            [clojure.string :as string])
-  (:import (java.net ServerSocket SocketException)
-           (java.io InputStream OutputStream)))
+  (:require [clojure.string :as string])
+  (:import (java.net ServerSocket SocketException Socket)
+           (java.io InputStream OutputStream)
+           (java.util.concurrent ExecutorService Executors)
+           (java.lang AutoCloseable)))
 
 (set! *warn-on-reflection* true)
 
@@ -186,29 +187,56 @@
                        "\r\n\r\n"
                        body])))
 
+(defprotocol ISocket
+  (^AutoCloseable -input-stream [this])
+  (^AutoCloseable -output-stream [this]))
+
+(extend-protocol ISocket
+  Socket
+  (-input-stream [this]
+    (.getInputStream this))
+  (-output-stream [this]
+    (.getOutputStream this)))
+
+(defn process
+  [{::keys [handler] :as env} client]
+  (with-open [in (-input-stream client)
+              out (-output-stream client)]
+    (-> env
+        (in->request in)
+        handler
+        (response->out out))))
+
+(defprotocol ISubmit
+  (-submit [this f]))
+
+(extend-protocol ISubmit
+  ExecutorService
+  (-submit [this ^Callable f]
+    (.submit this f)))
+
 (defn start
   [{:ring.request/keys [server-port]
-    ::keys             [handler]
     :as                env}]
-  (let [server (ServerSocket. server-port)]
+  (let [thread-pool (Executors/newFixedThreadPool 2)
+        server (ServerSocket. server-port)]
     (letfn [(stop-fn [_]
-              (.close server))]
-      (async/thread
-        (try
-          (loop []
-            (with-open [client (.accept server)
-                        in (.getInputStream client)
-                        out (.getOutputStream client)]
-              (-> env
-                  (in->request in)
-                  handler
-                  (response->out out)))
-            (recur))
-          (catch SocketException _ex)
-          (catch Throwable ex
-            (println ex))))
-      (assoc env
-        ::stop-fn stop-fn))))
+              (.shutdown thread-pool)
+              (.close server))
+            (accept []
+              (try
+                (loop []
+                  (let [client (.accept server)]
+                    (-submit thread-pool #(try
+                                            (process env client)
+                                            (finally
+                                              (.close client)))))
+                  (recur))
+                (catch SocketException _ex)
+                (catch Throwable ex
+                  (println ex))))]
+      (-submit thread-pool accept)
+      (assoc env ::stop-fn stop-fn))))
 
 (comment
   (defonce http-state (atom nil))
@@ -218,6 +246,7 @@
            (-> {:ring.request/server-port 8080
                 ::handler                 (fn [req]
                                             (tap> req)
+                                            ;; (pp/pprint req)
                                             {:ring.response/body    (.getBytes "ok")
                                              :ring.response/headers {"foo" "42"}
                                              :ring.response/status  200})}
