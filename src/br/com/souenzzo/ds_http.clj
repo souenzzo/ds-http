@@ -165,27 +165,19 @@
 
 (defn response->out
   [{:ring.response/keys [status body headers]} out]
-  (reduce -write
-          out (mapcat (fn [el]
-                        (cond
-                          (string? el) (.getBytes ^String el)
-                          (map? el) (reduce-kv (fn [bs k v]
-                                                 (byte-array (concat bs
-                                                                     (.getBytes "\r\n")
-                                                                     (.getBytes (str k))
-                                                                     (.getBytes ":")
-                                                                     (.getBytes (str v)))))
-                                               (byte-array [])
-                                               el)
-                          (bytes? el) el
-                          :else (.getBytes (str el))))
-                      ["HTTP/1.1 "
-                       status
-                       " "
-                       (code->reason status)
-                       headers
-                       "\r\n\r\n"
-                       body])))
+  (reduce -write out (.getBytes (str "HTTP/1.1 " status " " (code->reason status) "\r\n")))
+  (reduce-kv
+    (fn [out k vs]
+      (doseq [v (if (coll? vs)
+                  vs [vs])]
+        (reduce -write out (.getBytes (str k ":" v "\r\n")))))
+    out headers)
+  (-write out (int \return))
+  (-write out (int \newline))
+  (cond
+    (fn? body) (body out)
+    (bytes? body) (reduce -write out body)
+    :else (reduce -write out (.getBytes (str body)))))
 
 (defprotocol ISocket
   (^AutoCloseable -input-stream [this])
