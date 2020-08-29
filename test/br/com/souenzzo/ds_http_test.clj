@@ -4,6 +4,8 @@
             [clojure.test :refer [deftest is testing]])
   (:import (java.io ByteArrayOutputStream ByteArrayInputStream)))
 
+(set! *warn-on-reflection* true)
+
 (extend-protocol ds/IOutputStream
   ByteArrayOutputStream
   (-write [this b]
@@ -17,7 +19,7 @@
 
 (defn str->is
   [s]
-  (ByteArrayInputStream. (.getBytes s)))
+  (ByteArrayInputStream. (.getBytes (str  s))))
 
 (deftest unit
   (is (= :get
