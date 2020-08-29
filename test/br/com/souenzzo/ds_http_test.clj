@@ -2,26 +2,22 @@
   (:require [br.com.souenzzo.ds-http :as ds]
             [clj-kondo.core :as kondo]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.nio.charset StandardCharsets)
-           (java.io ByteArrayOutputStream)
-           (java.lang AutoCloseable)))
+  (:import (java.io ByteArrayOutputStream ByteArrayInputStream)))
 
 (extend-protocol ds/IOutputStream
   ByteArrayOutputStream
   (-write [this b]
-    (.write this (int b))))
+    (.write this (int b))
+    this))
+
+(extend-protocol ds/IInputStream
+  ByteArrayInputStream
+  (-read [this]
+    (.read this)))
 
 (defn str->is
   [s]
-  (let [ss (atom (into [nil]
-                       (map int s)))]
-    (reify ds/IInputStream
-      (-read [this]
-        (-> ss
-            (swap! rest)
-            first))
-      AutoCloseable
-      (close [this]))))
+  (ByteArrayInputStream. (.getBytes s)))
 
 (deftest unit
   (is (= :get
@@ -58,7 +54,6 @@
     (is (= {"cookie" " bAr;tar"}
            (ds/read-headers (str->is "cookie: bAr\r\ncookie:tar\r\n\r\n"))))))
 
-
 (deftest full-request
   (is (= {:ring.request/headers  {"foo" "bar"}
           :ring.request/method   :get
@@ -70,37 +65,28 @@
              (dissoc :ring.request/body)))))
 
 (deftest full-response
-  (let [bs (atom [])]
+  (let [baos (ByteArrayOutputStream.)]
     (ds/response->out
       {:ring.response/status  200
        :ring.response/body    "ok"
        :ring.response/headers {"a" "b"}}
-      (reify ds/IOutputStream
-        (-write [this b]
-          (swap! bs conj b)
-          this)))
+      baos)
     (is (= "HTTP/1.1 200 OK\r\na:b\r\n\r\nok"
-           (String. (byte-array @bs) (str StandardCharsets/UTF_8))))))
+           (str baos)))))
 
 (deftest kondo
   (is (= []
          (:findings (kondo/run! {:lint ["src"]})))))
 
 (deftest end-to-end
-  (let [bs (atom [])]
+  (let [baos (ByteArrayOutputStream.)]
     (ds/process {::ds/handler (fn [req]
                                 {:ring.response/body    "ok"
-                                 :ring.response/headers {"foo" "bar"}
+                                 :ring.response/headers {"car" "tar"}
                                  :ring.response/status  200})}
                 (reify ds/ISocket
                   (-input-stream [this]
                     (str->is "GET /foo?query HTTP/1.1\r\nfoo:bar\r\n\r\ncar"))
-                  (-output-stream [this]
-                    (reify ds/IOutputStream
-                      (-write [this b]
-                        (swap! bs conj b)
-                        this)
-                      AutoCloseable
-                      (close [this])))))
-    (is (= "HTTP/1.1 200 OK\r\nfoo:bar\r\n\r\nok"
-           (String. (byte-array @bs) (str StandardCharsets/UTF_8))))))
+                  (-output-stream [this] baos)))
+    (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
+           (str baos)))))
