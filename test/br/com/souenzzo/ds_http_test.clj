@@ -1,25 +1,11 @@
 (ns br.com.souenzzo.ds-http-test
   (:require [br.com.souenzzo.ds-http :as ds]
             [clj-kondo.core :as kondo]
+            [br.com.souenzzo.ds-http.testing :refer [str->is request->input-stream]]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.io ByteArrayOutputStream ByteArrayInputStream)))
+  (:import (java.io ByteArrayOutputStream)))
 
 (set! *warn-on-reflection* true)
-
-(extend-protocol ds/IOutputStream
-  ByteArrayOutputStream
-  (-write [this b]
-    (.write this (int b))
-    this))
-
-(extend-protocol ds/IInputStream
-  ByteArrayInputStream
-  (-read [this]
-    (.read this)))
-
-(defn str->is
-  [s]
-  (ByteArrayInputStream. (.getBytes (str  s))))
 
 (deftest unit
   (is (= :get
@@ -92,3 +78,21 @@
                   (-output-stream [this] baos)))
     (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
            (str baos)))))
+
+(deftest request-helper
+  (let [baos (ByteArrayOutputStream.)]
+    (ds/process {::ds/handler (fn [req]
+                                {:ring.response/body    "ok"
+                                 :ring.response/headers {"car" "tar"}
+                                 :ring.response/status  200})}
+                (reify ds/ISocket
+                  (-input-stream [this]
+                    (request->input-stream
+                      {:ring.request/path    "/foo?query"
+                       :ring.request/method  :get
+                       :ring.request/headers {"foo" "bar"}
+                       :ring.request/body    "car"}))
+                  (-output-stream [this] baos)))
+    (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
+           (str baos)))))
+
