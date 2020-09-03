@@ -49,16 +49,16 @@
           :ring.request/protocol "HTTP/1.1"
           :ring.request/query    "query"
           :ring.request/scheme   :http}
-         (-> (ds/in->request {} (str->is "GET /foo?query HTTP/1.1\r\nfoo:bar\r\n\r\ncar"))
-             (dissoc :ring.request/body)))))
+         (-> (ds/in->request {::ds/in (str->is "GET /foo?query HTTP/1.1\r\nfoo:bar\r\n\r\ncar")})
+             (dissoc ::ds/in :ring.request/body)))))
 
 (deftest full-response
   (let [baos (ByteArrayOutputStream.)]
     (ds/response->out
       {:ring.response/status  200
        :ring.response/body    "ok"
-       :ring.response/headers {"a" "b"}}
-      baos)
+       :ring.response/headers {"a" "b"}
+       ::ds/out               baos})
     (is (= "HTTP/1.1 200 OK\r\na:b\r\n\r\nok"
            (str baos)))))
 
@@ -71,11 +71,11 @@
     (ds/process {::ds/handler (fn [req]
                                 {:ring.response/body    "ok"
                                  :ring.response/headers {"car" "tar"}
-                                 :ring.response/status  200})}
-                (reify ds/ISocket
-                  (-input-stream [this]
-                    (str->is "GET /foo?query HTTP/1.1\r\nfoo:bar\r\n\r\ncar"))
-                  (-output-stream [this] baos)))
+                                 :ring.response/status  200})
+                 ::ds/client  (reify ds/ISocket
+                                (-input-stream [this]
+                                  (str->is "GET /foo?query HTTP/1.1\r\nfoo:bar\r\n\r\ncar"))
+                                (-output-stream [this] baos))})
     (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
            (str baos)))))
 
@@ -84,15 +84,15 @@
     (ds/process {::ds/handler (fn [req]
                                 {:ring.response/body    "ok"
                                  :ring.response/headers {"car" "tar"}
-                                 :ring.response/status  200})}
-                (reify ds/ISocket
-                  (-input-stream [this]
-                    (request->input-stream
-                      {:ring.request/path    "/foo?query"
-                       :ring.request/method  :get
-                       :ring.request/headers {"foo" "bar"}
-                       :ring.request/body    "car"}))
-                  (-output-stream [this] baos)))
+                                 :ring.response/status  200})
+                 ::ds/client  (reify ds/ISocket
+                                (-input-stream [this]
+                                  (request->input-stream
+                                    {:ring.request/path    "/foo?query"
+                                     :ring.request/method  :get
+                                     :ring.request/headers {"foo" "bar"}
+                                     :ring.request/body    "car"}))
+                                (-output-stream [this] baos))})
     (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
            (str baos)))))
 

@@ -2,7 +2,7 @@
   (:require [clojure.string :as string])
   (:import (java.net ServerSocket SocketException Socket)
            (java.io InputStream OutputStream)
-           (java.util.concurrent ExecutorService Executors)
+           (java.util.concurrent Executors Executor)
            (java.lang AutoCloseable)))
 
 (set! *warn-on-reflection* true)
@@ -145,14 +145,14 @@
   (stop-fn env))
 
 (defn in->request
-  [env is]
-  (let [method (read-method is)
-        path (string/split (read-path is)
+  [{::keys [in] :as env}]
+  (let [method (read-method in)
+        path (string/split (read-path in)
                            #"\?")
-        protocol (read-protocol is)
-        headers (read-headers is)]
+        protocol (read-protocol in)
+        headers (read-headers in)]
     (assoc env
-      :ring.request/body is
+      :ring.request/body in
       :ring.request/headers headers
       :ring.request/method method
       :ring.request/path (first path)
@@ -164,7 +164,8 @@
       #_:ring.request/ssl-client-cert)))
 
 (defn response->out
-  [{:ring.response/keys [status body headers]} out]
+  [{::keys [out]
+    :ring.response/keys [status body headers]}]
   (reduce -write out (.getBytes (str "HTTP/1.1 " status " " (code->reason status) "\r\n")))
   (reduce-kv
     (fn [out k vs]
@@ -191,43 +192,46 @@
     (.getOutputStream this)))
 
 (defn process
-  [{::keys [handler] :as env} client]
+  [{::keys [handler client] :as env}]
   (with-open [in (-input-stream client)
               out (-output-stream client)]
     (-> env
-        (in->request in)
+        (assoc ::in in ::out out)
+        in->request
         handler
-        (response->out out))))
+        response->out)))
 
-(defprotocol ISubmit
-  (-submit [this f]))
+(defprotocol IExecutor
+  (-execute [this f]))
 
-(extend-protocol ISubmit
-  ExecutorService
-  (-submit [this ^Callable f]
-    (.submit this f)))
+(extend-protocol IExecutor
+  Executor
+  (-execute [this f]
+    (.execute this f)))
 
 (defn start
   [{:ring.request/keys [server-port]
     :as                env}]
   (let [thread-pool (Executors/newFixedThreadPool 2)
-        server (ServerSocket. server-port)]
+        server (ServerSocket. server-port)
+        env (assoc env ::server server)]
     (letfn [(stop-fn [_]
               (.shutdown thread-pool)
               (.close server))
-            (accept []
+            (watch-accept []
               (try
                 (loop []
-                  (let [client (.accept server)]
-                    (-submit thread-pool #(try
-                                            (process env client)
-                                            (finally
-                                              (.close client)))))
+                  (let [client (.accept server)
+                        env (assoc env ::client client)]
+                    (-execute thread-pool #(try
+                                             (process env)
+                                             (finally
+                                               (.close client)))))
                   (recur))
                 (catch SocketException _ex)
                 (catch Throwable ex
                   (println ex))))]
-      (-submit thread-pool accept)
+      (-execute thread-pool watch-accept)
       (assoc env ::stop-fn stop-fn))))
 
 (comment
@@ -242,4 +246,15 @@
                                             {:ring.response/body    (.getBytes "ok")
                                              :ring.response/headers {"foo" "42"}
                                              :ring.response/status  200})}
-               start))))
+               start)))
+  (let [stdin (async/chan)
+        prn2 #(locking prn (prn %) %)]
+    (async/pipeline-blocking
+      2
+      (async/chan (async/dropping-buffer 0))                ;; /dev/null
+      (map prn2)
+      stdin)
+    (dotimes [i 10]
+      (async/put! stdin i))
+    (Thread/sleep 1000)
+    (async/close! stdin)))
