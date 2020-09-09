@@ -95,4 +95,3 @@
                                 (-output-stream [this] baos))})
     (is (= "HTTP/1.1 200 OK\r\ncar:tar\r\n\r\nok"
            (str baos)))))
-
